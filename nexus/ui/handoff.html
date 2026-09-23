@@ -1,0 +1,11 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>
+body{font:15px/1.7 system-ui,sans-serif;color:#163c43;background:#f5f9fa;margin:0;padding:20px}h2{font-size:21px;margin:0 0 10px}button,a{display:inline-block;padding:10px 14px;margin:6px 4px 6px 0;border:1px solid #b8cdcf;border-radius:9px;background:white;color:#075d63}button:enabled{cursor:pointer}button:disabled{opacity:.45}#preview{display:block;max-width:100%;margin:14px 0;image-rendering:pixelated}#status{white-space:pre-wrap;background:white;padding:12px;border-radius:8px}small{display:block;color:#536f76}input{max-width:100%}[hidden]{display:none!important}code{overflow-wrap:anywhere}</style></head><body>
+<h2>Nexus 原本受渡し試験</h2><p>対象は合成画像1枚です。原本と一致したデータだけをChatGPTへ渡します。</p>
+<p id="status" role="status">原本の受信を待っています。</p><img id="preview" hidden alt="受信・照合した合成原本"><a id="download" hidden download="nexus-small-png-r1.png">照合済み原本を保存</a>
+<p><label>通常ファイルの基準試験（同じ原本だけ選択）<br><input id="local" type="file" accept="image/png" disabled></label></p>
+<button id="upload" disabled>この原本をChatGPTへ渡す</button><button id="inspect" disabled>渡した原本を検査する</button>
+<button id="recheck" disabled>登録済みファイルを再取得・照合</button>
+<p>画像参照の試験：登録後、ページを再読込せず通常の入力欄から「今渡した画像だけを見て、配置と色を説明してください。原本byteの検査は不要です。見えない場合はそう答えてください」と依頼します。</p>
+<details open><summary>試験の状態（URLの秘密部分は表示しません）</summary><pre id="diagnostics"></pre></details>
+<small>受信データの一致、ChatGPTへの登録、ChatGPT内での原本検査は別の段階です。失敗時は推測で補いません。</small>
+<script>/* NEXUS_SCRIPT */</script></body></html>

@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "nexus-core-v2-local-relay",
+  "main": "src/relay.ts",
+  "compatibility_date": "2026-09-18",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": { "enabled": false },
+  "durable_objects": { "bindings": [{ "name": "TUNNEL", "class_name": "LocalTunnel" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["LocalTunnel"] }],
+  "d1_databases": [{ "binding": "DB", "database_name": "nexus-relay-local",
+    "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "relay-migrations" }],
+  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "00000000000000000000000000000000" }],
+  "vars": {
+    "RELAY_ENABLED": "false", "PUBLIC_ORIGIN": "https://nexus.invalid",
+    "OWNER_ID": "unconfigured", "PROJECT_ID": "synthetic-probe",
+    "GITHUB_CLIENT_ID": "unconfigured", "ALLOWED_REDIRECTS": "[]"
+  }
+}

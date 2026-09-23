@@ -1,0 +1,9 @@
+<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font:15px/1.7 system-ui;background:#f5f9fa;color:#163c43;padding:18px}button,input{padding:10px;margin:6px;border:1px solid #a9bec5;border-radius:8px}button:disabled{opacity:.45}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:white;padding:12px}img{max-width:100%}[hidden]{display:none!important}</style>
+<h2>Nexus モデル文脈の分離試験 v5</h2><p>合成原本だけの試験です。対応宣言がないChatGPTでは、互換性確認として各送信を1回だけ試します。文脈の受付とモデル到達は別に確認します。</p>
+<pre id="status" role="status">初期化中</pre><img id="preview" hidden alt="照合済み合成原本">
+<button id="text" disabled>① 試験コードを文脈へ送る</button><p>再読込みせず、通常入力で「今渡された試験コードだけを答えてください」と質問してください。</p>
+<details><summary>照合用コード（質問には転記しません）</summary><pre id="nonce"></pre></details>
+<label>モデルが回答したコード<input id="answer" autocomplete="off"></label><button id="compare" disabled>回答を照合する</button>
+<button id="image" disabled>② 原本画像を文脈へ送る</button><p>②の受付後、通常入力で画像の配置と色だけを質問します。③の原本byte検査は別ターンです。</p>
+<pre id="diagnostics"></pre><small>この画面はモデルの画像理解や実ファイル検査を自動認定しません。外部保存先へのfetch・ファイル登録は行いません。</small>
+<script>/* NEXUS_SCRIPT */</script></html>

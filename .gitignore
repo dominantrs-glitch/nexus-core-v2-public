@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+runtime/
+.env
+node_modules/
+.wrangler/
+dist/
+.dev.vars*
+coverage/
+cloudflare/wrangler.remote.jsonc
+cloudflare/wrangler.relay.remote.jsonc
+cloudflare/wrangler.git-pilot.remote.jsonc

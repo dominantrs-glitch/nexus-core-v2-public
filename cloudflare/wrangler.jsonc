@@ -1,0 +1,22 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "nexus-core-v2-probe",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-18",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": { "enabled": false },
+  "d1_databases": [{
+    "binding": "DB", "database_name": "nexus-probe-local",
+    "database_id": "00000000-0000-0000-0000-000000000000",
+    "migrations_dir": "migrations"
+  }],
+  "r2_buckets": [{ "binding": "BLOBS", "bucket_name": "nexus-probe-local" }],
+  "vars": {
+    "PROBE_ENABLED": "false",
+    "AUTH_ISSUER": "https://issuer.invalid/",
+    "MCP_RESOURCE": "https://nexus.invalid/mcp",
+    "PROJECT_ID": "synthetic-probe"
+  }
+}
