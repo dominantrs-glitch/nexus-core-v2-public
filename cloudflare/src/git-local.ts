@@ -9,7 +9,7 @@ const configSchema = z.object({owner:z.string().min(1),generation:z.string().min
   private_key_file:z.string().min(1),repository:z.string(),repository_id:z.string(),
   branch:z.string(),app_id:z.string(),installation_id:z.string(),mode:dataMode.default("synthetic"),
   native_owner:z.string().min(1).max(200).optional()}).strict();
-const requestSchema = z.object({operation:z.enum(["list","read","search","original","binary","saveRelation","work","saveWork","saveHours","create","save","core_read","core_write"]),args:z.unknown()}).strict();
+const requestSchema = z.object({operation:z.enum(["list","read","search","original","binary","saveRelation","work","daily","saveWork","saveHours","create","save","core_read","core_write","lifecycle","previewLifecycle","applyLifecycle","reviewStart","capabilities","previewRule","applyRule","previewNoteRemoval","applyNoteRemoval"]),args:z.unknown()}).strict();
 async function run() {
   const config=configSchema.parse(JSON.parse(readFileSync(process.argv[2],"utf8")));
   let raw="";
@@ -36,6 +36,7 @@ async function run() {
 run().catch(error=>{
   // Never echo a credential, input payload, config path or upstream response.
   process.stdout.write(JSON.stringify({ok:false,reason:error instanceof StoreError?error.code:
-    error instanceof z.ZodError?"invalid_arguments_or_configuration":"canonical_unavailable_or_outcome_unknown"}));
+    error instanceof z.ZodError?"invalid_arguments_or_configuration":"canonical_unavailable_or_outcome_unknown",
+    ...(error instanceof StoreError&&error.diagnostic?{diagnostic:error.diagnostic}:{})}));
   process.exitCode=1;
 });

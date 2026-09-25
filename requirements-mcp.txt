@@ -1,0 +1,2 @@
+# Optional local MCP server adapter.
+mcp==2.2.0

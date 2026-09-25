@@ -98,3 +98,91 @@ it('exposes MCP read/write schemas and fails closed on corrupt indexed content',
   expect(result.isError).toBe(true);
   expect(result.content[0].text).toContain('read_unavailable');
 });
+
+it('links actual corrections and check reports when an ordinary work item closes, then withdraws stale assessment',async()=>{
+  const {store,args}=await setup(),work=await store.saveWork(args);
+  const correction=await store.save({project:args.project,kind:'correction',body:'Keep original date',
+    evidence:'user_statement',quote:'Keep the date',source:'synthetic correction',expected_revision:1,request_id:'correction'});
+  const check=await store.save({project:args.project,kind:'research',body:'Date preservation check passed',
+    evidence:'external_source',quote:'',source:'synthetic executed test',expected_revision:2,request_id:'check'});
+  const ref=(r:any)=>({project:r.project,note:r.note,revision:r.revision});
+  const learning={corrections:[ref(correction)],checks:[ref(check)],conclusion:'Preserve the supplied date; scoped draft lesson.'};
+  const done=await store.saveWork({...args,expected_revision:3,request_id:'done-with-evidence',supersedes:work.note,
+    item:{...args.item,status:'done',learning}});
+  expect((await store.work({...day,include_closed:true})).items[0].learning_evaluation).toMatchObject({
+    status:'candidate_review_available',source_status:'current',binding:false,verification:'draft_sources_only',sources:learning});
+  expect((await store.work({...day,include_closed:true})).learning_candidates).toMatchObject([
+    {sources:learning,effect:'not_evaluated',authority:'candidate',binding:false}]);
+  await store.save({project:args.project,kind:'research',body:'The old check is superseded',supersedes:check.note,
+    evidence:'external_source',quote:'',source:'synthetic second test',expected_revision:4,request_id:'check-new'});
+  const stale=await store.work({...day,include_closed:true});
+  expect(stale.items[0].learning_evaluation.status).toBe('source_unavailable_review_again');
+  expect(stale.items[0]).not.toHaveProperty('learning');
+  expect(stale.learning_candidates).toEqual([]);
+  expect(JSON.stringify(stale)).not.toContain(learning.conclusion);
+  expect((await store.work({...day})).learning_reviews).toMatchObject([{work_status:'done',status:'source_unavailable_review_again'}]);
+  await expect(store.saveWork({...args,expected_revision:5,request_id:'stale-evidence',supersedes:done.note,
+    item:{...args.item,status:'done',learning}})).rejects.toThrow('learning_source_unavailable');
+});
+
+it('shows unresolved and legacy learning reviews without reopening completed work or adding action alerts',async()=>{
+  const {git,store,args}=await setup(),done=await store.saveWork({...args,item:{...args.item,status:'done'}});
+  const open=await store.work({...day});
+  const completedAt=(await store.work({...day,include_closed:true})).items[0].completed_at;
+  expect(open).toMatchObject({items:[],alerts:[],learning_reviews:[{id:'one',work_status:'done',status:'review_required'}],learning_candidates:[]});
+  expect(open).not.toHaveProperty('closed_review_items');
+  delete git.objects.get(git.branch)![`projects/${args.project}/learning-evaluations/${done.note}.json`];
+  expect((await store.work({...day})).learning_reviews[0].status).toBe('not_evaluated_legacy');
+  const reviewed=await store.saveWork({...args,expected_revision:1,request_id:'assessment',supersedes:done.note,
+    item:{...args.item,status:'done',learning:{corrections:[],checks:[],conclusion:'No correction found after reviewing this work.'}}});
+  expect((await store.work({...day})).learning_reviews).toEqual([]);
+  expect((await store.work({...day,include_closed:true})).items[0].completed_at)
+    .toBe(completedAt);
+  expect(reviewed.revision).toBe(2);
+});
+
+it.each(['scope','status','sources'])('does not trust an assessment with mismatched %s',async field=>{
+  const {git,store,args}=await setup(),done=await store.saveWork({...args,item:{...args.item,status:'done',
+    learning:{corrections:[],checks:[],conclusion:'Original assessment'}}});
+  const assessment:any=git.objects.get(git.branch)![`projects/${args.project}/learning-evaluations/${done.note}.json`];
+  if(field==='scope')assessment.scope='another-project';
+  if(field==='status')assessment.status='candidate_review_available';
+  if(field==='sources')assessment.sources.conclusion='INJECTED REUSABLE ADVICE';
+  const view=await store.work({...day,include_closed:true});
+  expect(view.learning_reviews[0].status).toBe('source_unavailable_review_again');
+  expect(view.learning_candidates).toEqual([]);
+  expect(view.items[0]).not.toHaveProperty('learning');
+  expect(JSON.stringify(view)).not.toContain('INJECTED REUSABLE ADVICE');
+});
+
+it('keeps closed reviews bounded and paged, rejects outdated snapshots and omits cancelled work',async()=>{
+  const {git,store,args}=await setup();
+  for(let n=0;n<21;n++)await store.saveWork({...args,expected_revision:n,request_id:'done-'+n,
+    item:{...args.item,id:'done-'+n,title:'Done '+n,status:n===20?'cancelled':'done'}});
+  const first=await store.work({...day});
+  expect(first.items).toEqual([]);
+  expect(first.learning_reviews).toHaveLength(20);
+  expect(first.counts.records_checked).toBe(20);
+  expect(first.exhausted).toBe(false);
+  const next=await store.work({...day,cursor:first.next_cursor,snapshot:first.snapshot});
+  expect(next.learning_reviews).toEqual([]);
+  expect(next.exhausted).toBe(true);
+  await store.saveWork({...args,expected_revision:21,request_id:'new-open'});
+  await expect(store.work({...day,cursor:first.next_cursor,snapshot:first.snapshot})).rejects.toThrow('snapshot_changed');
+  (git.objects.get(git.branch)!['nexus.json'] as any).projects[0].remote=false;
+  expect((await store.work({...day})).learning_reviews).toEqual([]);
+});
+
+it('does not call missing review a no-learning result and rejects unrelated or inferred check evidence',async()=>{
+  const {store,args}=await setup(),done=await store.saveWork({...args,item:{...args.item,status:'done'}});
+  expect((await store.work({...day,include_closed:true})).items[0].learning_evaluation.status).toBe('review_required');
+  const other=await store.create({title:'Other family',source:'synthetic',request_id:'other'});
+  const correction=await store.save({project:other.project,kind:'correction',body:'An unrelated correction',
+    evidence:'user_statement',quote:'different',source:'synthetic',expected_revision:0,request_id:'other-correction'});
+  const learning={corrections:[{project:other.project,note:correction.note,revision:1}],checks:[],conclusion:'Not applicable'};
+  await expect(store.saveWork({...args,expected_revision:1,request_id:'unrelated',supersedes:done.note,
+    item:{...args.item,status:'done',learning}})).rejects.toThrow('learning_source_unavailable');
+  await store.saveWork({...args,expected_revision:1,request_id:'reviewed-none',supersedes:done.note,
+    item:{...args.item,status:'done',learning:{corrections:[],checks:[],conclusion:'No relevant correction was recorded.'}}});
+  expect((await store.work({...day,include_closed:true})).items[0].learning_evaluation.status).toBe('no_linked_correction');
+});

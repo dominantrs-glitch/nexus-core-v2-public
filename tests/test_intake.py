@@ -165,7 +165,8 @@ class IntakeHTTPTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as root:
             w=Intake(root);server=build_intake_server(w)
             listing=await server.list_tools()
-            self.assertEqual(len(listing),4)
+            self.assertEqual(len(listing),5)
+            self.assertTrue(next(x for x in listing if x.name=='review_project_start').annotations.read_only_hint)
             self.assertFalse(next(x for x in listing if x.name=='create_project').annotations.read_only_hint)
             app=server.streamable_http_app(json_response=True,stateless_http=True)
             async with app.router.lifespan_context(app):

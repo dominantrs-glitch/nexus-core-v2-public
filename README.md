@@ -8,7 +8,18 @@ as the owner's approval.
 This source distribution has no private project data, credentials, production
 connections or previous private Git history. The source is available under the
 [MIT License](LICENSE). Every operator supplies their own private data and reviewed
-connections. This is an initial developer foundation, not a hosted service.
+connections. This is a developer foundation, not a hosted service.
+
+Start with [Core and optional adapters](docs/architecture.md). A local synthetic
+example runs with the Python standard library alone:
+
+```powershell
+python -S -m examples.core_only --root ./my-core-example
+```
+
+The explicit directory must be new. This opens no UI or network connection and
+does not touch the operator's existing data. Desktop, a particular AI client and
+cloud infrastructure are optional reference adapters.
 
 ## Included
 
@@ -16,8 +27,10 @@ connections. This is an initial developer foundation, not a hosted service.
   verification gates, explicit Windows owner confirmation, export and restore.
 - Attributed project notes, intentions/actions, short daily briefs, reported work
   hours, scoped learning and local decision comparison.
-- Git-backed shared notes, bounded search, relationship proposals, required context
-  routing, small images/PDFs, idempotent saves and optimistic concurrency.
+- Git-backed shared notes, scoped rule delivery, reversible note withdrawal,
+  project organization, source-checked learning, search and optimistic concurrency.
+- Explicitly shared PNG/JPEG/WebP/PDF originals up to 64 MiB; encrypted portable
+  backup, isolated restore and legacy-original catalog/extraction.
 - Cloudflare authentication/control adapter and optional Windows PC connector.
 - Synthetic tests and disabled connection templates. The older probe adapter is
   retained for tests; it is not the recommended production deployment.
@@ -40,9 +53,8 @@ npm run test:relay
 npm run build:git-local
 ```
 
-The exported source passed Python 207 tests, Git 144 tests, relay 20 tests, UI 14
-tests, TypeScript checking and the local Git-client build in a fresh dependency
-environment on Windows. Tests use synthetic data and local/mock backends.
+Release checks are recorded in [release validation](docs/release-validation.md).
+Tests use synthetic data and local/mock backends.
 Passing these checks is separate
 from a real owner's acceptance, long-term operational evidence, or a successful
 deployment in a different account.
@@ -75,8 +87,8 @@ before using legacy migration/reference lookup. Such links are historical
 references, never proof of a fetched or current original. No former owner's
 repository is configured. Missing required context must block dependent work.
 
-Small shared PNG/JPEG/PDF originals are limited to 256 KiB each and require explicit
-project/operation scope. The distribution does not contain a universal uploader,
+Shared PNG/JPEG/WebP/PDF originals are limited to 64 MiB each and require explicit
+project/operation scope. Listing metadata does not deliver original bytes. The distribution does not contain a universal uploader,
 automatic memory collection, model routing, or permission inheritance.
 
 ## Provenance and review

@@ -44,6 +44,42 @@ it("ordinary read includes scoped current context and attributed learning eviden
     verification:"source-references-only-not-native-validated-learning"});
   expect(view.context.items[1]).toMatchObject({note:{quote:"synthetic preference",evidence:"user_statement"}});
 });
+
+it('edits an attributed rule and every existing delivery reference atomically, preserving scope and retry identity',async()=>{
+  const {store,git,config}=await fixture();
+  const input={rule:'global_rules',project:'sources',note:'n-global_rules',expected_revision:5,expected_context_revision:1,
+    body:'The revised rule',quote:'Please use the revised rule',source:'synthetic owner request'};
+  const preview=await store.previewRule(input);
+  expect(preview).toMatchObject({scope_changed:false,impact:[{rule:'global_rules',projects:['target']}]});
+  await expect(store.save({project:'sources',kind:'correction',body:input.body,quote:input.quote,source:input.source,
+    evidence:'user_statement',expected_revision:5,supersedes:'n-global_rules',request_id:'unsafe-update'}))
+    .rejects.toThrow('rule_update_requires_delivery_preview');
+  const apply={...input,plan_digest:preview.plan_digest,request_id:'rule-edit'};
+  const saved=await store.applyRule(apply);
+  expect(await store.applyRule(apply)).toEqual(saved);
+  expect(git.files['context.json'].revision).toBe(2);
+  expect(git.files['context.json'].profiles).toEqual(config.profiles);
+  expect(git.files['context.json'].entries[0]).toMatchObject({projects:['target'],source:{note:saved.note,revision:6}});
+  expect(git.files['projects/sources/records/n-global_rules.json']).toBeDefined();
+  const view=await store.read({project:'target'});
+  expect(view.context.complete).toBe(true);
+  expect(view.context.items[0]).toMatchObject({note:{body:input.body,captured_kind:'correction'}});
+});
+
+it('rejects stale previews, native sources and unreviewed scope changes without a write',async()=>{
+  const {store,git,config}=await fixture();
+  const input={rule:'global_rules',project:'sources',note:'n-global_rules',expected_revision:5,expected_context_revision:1,
+    body:'Replacement',quote:'Replacement',source:'synthetic owner'};
+  const preview=await store.previewRule(input),serial=git.serial;
+  config.entries[0].projects.push('sources');
+  await expect(store.applyRule({...input,plan_digest:preview.plan_digest,request_id:'changed-scope'}))
+    .rejects.toThrow('rule_preview_changed');
+  expect(git.serial).toBe(serial);
+  await expect(store.previewRule({...input,rule:'personal'})).rejects.toThrow('rule_requires_existing');
+  await expect(store.previewRule({...input,expected_context_revision:2})).rejects.toThrow('rule_policy_changed');
+  config.entries[0].source={native_project:'native',revision:1};
+  await expect(store.previewRule(input)).rejects.toThrow();
+});
 it("real intake resume routing does not imply implementation readiness or expand project scope", async () => {
   const {git,config} = await fixture();
   git.files["nexus.json"].mode = config.mode = "draft-intake";
@@ -118,12 +154,12 @@ it.each(["revision","generation","owner","duplicate","missing"])("rejects %s rou
   if (failure === "missing") delete git.files["context.json"];
   expect((await store.read({project:"target"})).context).toMatchObject({complete:false,status:"invalid_context_manifest",items:[]});
 });
-it("bounds output and ties context reads to the same repository snapshot",async () => {
+it("bounds context output and keeps status reads tied to the current repository snapshot",async () => {
   const {store,git} = await fixture(); const before=await git.head();
   for(const key of Object.keys(git.files).filter(k=>k.includes("/records/"))) git.files[key].body="x".repeat(8000);
   expect((await store.read({project:"target"})).context.status).toBe("context_budget_exceeded");
   git.serial++;
-  await expect(store.read({project:"target",snapshot:before})).rejects.toThrow("snapshot_changed");
+  await expect(store.read({project:"target",detail:'overview',snapshot:before})).rejects.toThrow("snapshot_changed");
 });
 it("draft tools cannot set context policy; ordinary saves preserve its pinned revision",async () => {
   const {store,git} = await fixture();
@@ -148,6 +184,52 @@ it("only an explicit trusted profile can raise the default context byte budget",
 it.each([1023,49153,40960.5])('invalid trusted profile budget %s fails closed',async max_bytes=>{
   const {store,config}=await fixture();config.profiles[0].max_bytes=max_bytes;
   expect((await store.read({project:'target'})).context).toMatchObject({complete:false,status:'invalid_context_manifest',items:[]});
+});
+
+it('owner rules reach a new permitted project without copying its policy',async()=>{
+  const {store,config}=await fixture();
+  config.entries[0].scope='owner';config.entries[0].projects=['*'];
+  config.profiles.push({project:'*',operations:['resume','implement'],required:{global_rules:['global_rules'],personal:[],learning:[],relations:[]}});
+  const context=(await store.read({project:'sources',operation:'implement'})).context;
+  expect(context).toMatchObject({complete:true,coverage:{owner:true,project:false},items:[{id:'global_rules',scope:'owner',binding:false}]});
+});
+it('scoped task rules require classification and only matching rules become mandatory',async()=>{
+  const {store,config}=await fixture();
+  Object.assign(config.entries[0],{scope:'task_type',task_types:['coding']});
+  expect((await store.read({project:'target',operation:'implement'})).context)
+    .toMatchObject({complete:false,status:'context_classification_required'});
+  const unrelated=(await store.read({project:'target',operation:'implement',task_types:[]})).context;
+  expect(unrelated).toMatchObject({complete:true,selection:[{id:'global_rules',reason:'task_type_not_matched'}, {}, {}, {}]});
+  expect(unrelated.items).toHaveLength(3);
+  expect((await store.read({project:'target',operation:'implement',task_types:['coding']})).context.items).toHaveLength(4);
+});
+it('judgment routing is explicit, relevant and excluded from independent checks',async()=>{
+  const {store,config}=await fixture();
+  Object.assign(config.entries[1],{scope:'judgment',triggers:['priority','tradeoff']});
+  expect((await store.read({project:'target',operation:'plan'})).context.complete).toBe(false);
+  expect((await store.read({project:'target',operation:'plan',decision_factors:['none']})).context)
+    .toMatchObject({complete:true,categories:{personal:'no_match'}});
+  expect((await store.read({project:'target',operation:'plan',decision_factors:['tradeoff']})).context.items).toHaveLength(4);
+  expect((await store.read({project:'target',operation:'implement',mode:'independent'})).context.complete).toBe(true);
+  await expect(store.read({project:'target',decision_factors:['none','tradeoff']})).rejects.toThrow();
+});
+it('malformed global or conditional scopes fail closed',async()=>{
+  const {store,config}=await fixture();config.entries[0].scope='owner';
+  expect((await store.read({project:'target'})).context.status).toBe('invalid_context_scope');
+  config.entries[0].scope='task_type';
+  expect((await store.read({project:'target'})).context.status).toBe('invalid_context_scope');
+});
+it('subsequent full pages omit only already-read identical context and still recheck access',async()=>{
+  const {store,git}=await fixture();
+  for(let i=0;i<11;i++)await store.save({project:'target',kind:'proposal',evidence:'model_inference',quote:'',
+    source:'test',body:'page '+i,request_id:'page-'+i,expected_revision:i});
+  const first=await store.read({project:'target'});
+  const args={project:'target',snapshot:first.snapshot,offset:10,known_context_digest:first.context_digest};
+  expect((await store.read(args)).context).toMatchObject({complete:true,items:[],items_omitted:true});
+  git.files['nexus.json'].projects[1].remote=false;
+  const revoked=(await store.read(args)).context;
+  expect(revoked.complete).toBe(false);
+  expect((revoked as any).items_omitted).not.toBe(true);
 });
 
 async function originalFixture() {

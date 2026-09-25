@@ -216,6 +216,30 @@ it("reauthorizing the same client preserves other device sessions and explicit r
   expect((await call(third.token)).status).toBe(503);
   await expect(authorize(first.client)).rejects.toThrow();
 });
+it('runs preview, withdrawal, search exclusion and exact restoration through authenticated workerd MCP',async()=>{
+  const auth=await authorize(),fake=await new FakeGitHub().init('123');
+  Object.assign(env,fake.config,{GIT_WORKSPACE_ENABLED:'true'});
+  vi.mocked(fetch).mockImplementation((input,init)=>fake.fetch(input,init));
+  const call=async(name:string,args:unknown)=>{
+    const response=await request('/mcp',{method:'POST',headers:{Authorization:'Bearer '+auth.token,'Content-Type':'application/json'},
+      body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name,arguments:args}})});
+    expect(response.status).toBe(200);
+    const result=(await response.json() as any).result;
+    expect(result.isError).not.toBe(true);return result.structuredContent;
+  };
+  const {project}=await call('create_project',{title:'Synthetic removal',source:'fixture',request_id:'create'});
+  const original=await call('save_project_note',{project,kind:'proposal',body:'synthetic balloon',source:'fixture',
+    evidence:'model_inference',quote:'',expected_revision:0,request_id:'save'});
+  const input={action:'remove',project,note:original.note,expected_revision:1,quote:'Remove the test note',source:'synthetic owner',reason:'test'};
+  const preview=await call('preview_note_removal',input);
+  const removed=await call('apply_note_removal',{...input,plan_digest:preview.plan_digest,request_id:'remove'});
+  expect((await call('search_project_notes',{project,query:'balloon'})).matches).toEqual([]);
+  expect((await call('read_project',{project})).withdrawn_notes[0].note).toBe(removed.note);
+  const restore={...input,action:'restore',note:removed.note,expected_revision:2,quote:'Restore the test note'};
+  const plan=await call('preview_note_removal',restore);
+  await call('apply_note_removal',{...restore,plan_digest:plan.plan_digest,request_id:'restore'});
+  expect((await call('read_project',{project})).notes[0]).toMatchObject({body:'synthetic balloon',evidence:'model_inference',quote:''});
+});
 it("runs authenticated Git draft MCP in workerd without PC and recovers a lost save response", async () => {
   const auth = await authorize();
   const fake = await new FakeGitHub().init("123");

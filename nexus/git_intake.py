@@ -13,6 +13,15 @@ from nexus.intake import Intake
 from nexus.source_documents import source_documents
 
 
+class CanonicalUnavailable(ValueError):
+    """Sanitized upstream diagnosis; never contains an input or credential."""
+    def __init__(self, reason, diagnostic=None):
+        self.diagnostic = diagnostic
+        super().__init__(reason + (('; retry after ' + str(diagnostic['retry_after_seconds']) + ' seconds')
+                                  if diagnostic and diagnostic.get('retryable') and
+                                  type(diagnostic.get('retry_after_seconds')) is int else ''))
+
+
 class GitIntake:
     def __init__(self, root, call=None):
         self.root = Path(root).resolve()
@@ -34,7 +43,7 @@ class GitIntake:
         node = shutil.which('node')
         if not node or not runner.is_file() or not self.config.is_file():
             raise ValueError('canonical Git client unavailable; no local fallback')
-        sources = ('git-local.ts','git-store.ts','git-search.ts','git-relations.ts','git-work.ts','git-binary.ts','git-context.ts','git-original.ts','git-core.ts','git-native-context.ts','git-native-learning.ts','github-store.ts','relay-common.ts','source-documents.ts')
+        sources = ('git-local.ts','git-store.ts','git-rules.ts','git-note-removal.ts','git-validation.ts','git-lifecycle.ts','git-start.ts','git-search.ts','git-relations.ts','git-work.ts','git-daily.ts','git-calendar.ts','git-binary.ts','git-context.ts','git-original.ts','git-core.ts','git-native-context.ts','git-native-learning.ts','github-store.ts','relay-common.ts','source-documents.ts')
         if any((base/'cloudflare/src'/name).stat().st_mtime > runner.stat().st_mtime for name in sources):
             raise ValueError('canonical Git client build is stale; rebuild before use')
         try:
@@ -50,12 +59,16 @@ class GitIntake:
             reason=response.get('reason','canonical unavailable or outcome unknown')
             if not isinstance(reason,str) or len(reason)>150:
                 reason='canonical unavailable or outcome unknown'
-            raise ValueError(reason)
+            diagnostic=response.get('diagnostic')
+            if not isinstance(diagnostic,dict):diagnostic=None
+            raise CanonicalUnavailable(reason,diagnostic)
         return response['result']
 
-    def list(self, query='', *, remote=False, offset=0, snapshot=None):
+    def list(self, query='', *, remote=False, offset=0, snapshot=None, include_archived=False, include_merged=False):
         args=dict(query=query,offset=offset)
         if snapshot is not None: args['snapshot']=snapshot
+        if include_archived:args['include_archived']=True
+        if include_merged:args['include_merged']=True
         return self._call('list',args)
 
     def search(self, query, *, project=None, kinds=None, cursor=None, snapshot=None):
@@ -87,21 +100,52 @@ class GitIntake:
     def save_hours(self, **args):
         return self._call('saveHours', args)
 
+    def lifecycle(self, **args):
+        return self._call('lifecycle', args)
+
+    def preview_lifecycle(self, **args):
+        return self._call('previewLifecycle', args)
+
+    def apply_lifecycle(self, **args):
+        return self._call('applyLifecycle', args)
+
+    def review_start(self, **args):
+        return self._call('reviewStart', args)
+
+    def capabilities(self):
+        return self._call('capabilities', {})
+
+    def preview_rule(self, **args):
+        return self._call('previewRule', args)
+
+    def apply_rule(self, **args):
+        return self._call('applyRule', args)
+
+    def preview_note_removal(self, **args):
+        return self._call('previewNoteRemoval', args)
+
+    def apply_note_removal(self, **args):
+        return self._call('applyNoteRemoval', args)
+
     def read(self, project, *, remote=False, offset=0, snapshot=None, operation='resume',mode='delegate',detail='full',
-             since_revision=None,known_snapshot=None,known_context_digest=None):
+             since_revision=None,known_snapshot=None,known_context_digest=None,task_types=None,decision_factors=None):
         args=dict(project=project,offset=offset,operation=operation,mode=mode)
         if detail != 'full':args['detail']=detail
         if snapshot is not None: args['snapshot']=snapshot
         if since_revision is not None:args['since_revision']=since_revision
         if known_snapshot is not None:args['known_snapshot']=known_snapshot
         if known_context_digest is not None:args['known_context_digest']=known_context_digest
+        if task_types is not None:args['task_types']=task_types
+        if decision_factors is not None:args['decision_factors']=decision_factors
         return self._call('read',args)
 
-    def create(self, title,source,request_id, *, remote=False):
+    def create(self, title,source,request_id, *, remote=False,review=None):
         # Cloud route only supports explicitly shared projects. Never turn a local
         # confidential create into an external write by dropping its scope flag.
         if not remote: raise ValueError('local-only creation unavailable on cloud route')
-        return self._call('create',dict(title=title,source=source,request_id=request_id))
+        args=dict(title=title,source=source,request_id=request_id)
+        if review is not None:args['review']=review
+        return self._call('create',args)
 
     def save(self,project,kind,body,source,evidence,quote,expected_revision,request_id, *, supersedes=None,remote=False):
         return self._call('save',dict(project=project,kind=kind,body=body,source=source,evidence=evidence,
@@ -114,20 +158,25 @@ class GitIntake:
         # Local originals are not implied to exist merely because cloud notes do.
         raise ValueError('cloud project has no configured local original folder')
 
-    def export(self, project, *, operation='resume', mode='delegate'):
+    def export(self, project, *, operation='resume', mode='delegate', task_types=None, decision_factors=None):
         import hashlib
         from nexus.intake import identifier
         identifier(project)
-        view=self.read(project,operation=operation,mode=mode)
+        context_args=dict(operation=operation,mode=mode,task_types=task_types,decision_factors=decision_factors)
+        view=self.read(project,**context_args)
         if operation != 'resume' and not view.get('context',{}).get('complete'):
             raise ValueError('required context unavailable for requested export operation')
         while view['next_offset'] is not None:
-            page=self.read(project,offset=view['next_offset'],snapshot=view['snapshot'],operation=operation,mode=mode)
+            page=self.read(project,offset=view['next_offset'],snapshot=view['snapshot'],
+                           known_context_digest=view.get('context_digest'),**context_args)
             if page['snapshot']!=view['snapshot'] or page['generation']!=view['generation']:
                 raise ValueError('canonical changed during export; reread')
             if operation != 'resume' and not page.get('context',{}).get('complete'):
                 raise ValueError('required context unavailable during export')
             view['notes']+=page['notes'];view['next_offset']=page['next_offset']
+            if page.get('withdrawn_notes'):
+                view.setdefault('withdrawn_notes', []).extend(page['withdrawn_notes'])
+            if 'currentness' in page:view['currentness']=page['currentness']
         if 'source_documents' in view:
             view['source_documents']=source_documents(view['notes'])
         data=json.dumps(view,ensure_ascii=False,indent=2).encode()
@@ -142,9 +191,9 @@ class GitIntake:
             with target.open('xb') as stream: stream.write(data)
         return dict(path=str(target),sha256=checksum,revision=view['revision'],snapshot=view['snapshot'],generation=view['generation'])
 
-    def prepare(self, project):
+    def prepare(self, project, **kwargs):
         from nexus.intake import Intake
-        return Intake.prepare(self,project)
+        return Intake.prepare(self,project,**kwargs)
 
     def handoff_folder(self, project):
         from nexus.intake import identifier
@@ -160,10 +209,38 @@ class RoutedIntake(Intake):
     Resolve the registry per call so newly started processes do not retain a
     routing cache. Already-loaded pre-upgrade services still require a restart.
     """
-    def _target(self, project, remote=False):
+    def _default_target(self):
+        """Explicit owner-local opt-in to an already registered shared store.
+
+        Absent configuration preserves the old project-specific migration scope.
+        Broken configuration fails closed, including during new project creation.
+        """
         with self.db() as db:
-            self._project(db,project,remote)
+            row=db.execute('SELECT config_root,generation FROM intake_default_route WHERE singleton=1').fetchone()
+        if row is None:return None
+        try:
+            selection=dict(row)
+            root=Path(selection['config_root']).resolve()
+            config=json.loads((root/'canonical-git.json').read_text('utf-8'))
+            with self.db() as db:
+                registered=db.execute('SELECT 1 FROM intake_routes WHERE config_root=? AND generation=?',
+                                      (str(root),selection['generation'])).fetchone()
+            if not registered or config['generation']!=selection['generation']:raise ValueError()
+        except (OSError,KeyError,TypeError,ValueError):
+            raise ValueError('default canonical route unavailable; no local fallback') from None
+        return GitIntake(root)
+
+    def _target(self, project, remote=False):
+        from nexus.intake import identifier
+        identifier(project)
+        with self.db() as db:
+            local=db.execute('SELECT remote FROM projects WHERE id=?',(project,)).fetchone()
+            if local is not None and remote and not local['remote']:raise ValueError('project unavailable')
             row=db.execute('SELECT * FROM intake_routes WHERE project=?',(project,)).fetchone()
+        if local is None:
+            target=self._default_target()
+            if target:return target  # Git verifies the current catalog ACL itself.
+            raise ValueError('project unavailable')
         if row is None:return None
         root=Path(row['config_root'])
         try:
@@ -181,7 +258,7 @@ class RoutedIntake(Intake):
         target=self._target(project,kwargs.get('remote',False))
         return target.save(project,*args,**kwargs) if target else super().save(project,*args,**kwargs)
 
-    def create(self,title,source,request_id,*,remote=False):
+    def create(self,title,source,request_id,*,remote=False,review=None):
         # A replay of a migrated CREATE follows its old receipt to the same project.
         with self.db() as db:
             _,prior=self._retry(db,request_id,['create',title,source,remote])
@@ -189,14 +266,20 @@ class RoutedIntake(Intake):
             target=self._target(prior['project'],remote)
             if target:
                 # This is an existing shared project's replay, not new enrollment.
-                return target.create(title,source,request_id,remote=True)
+                return target.create(title,source,request_id,remote=True,review=review)
+        if remote and prior is None:
+            target=self._default_target()
+            if target:return target.create(title,source,request_id,remote=True,review=review)
+        if review is not None:
+            raise ValueError('reviewed shared creation requires the trusted canonical Git root; no local duplicate is created')
         return super().create(title,source,request_id,remote=remote)
 
-    def list(self,query='',*,remote=False,offset=0,snapshot=None):
+    def list(self,query='',*,remote=False,offset=0,snapshot=None,include_archived=False,include_merged=False):
         from nexus.git_migration import digest
         if not isinstance(query,str) or len(query)>200 or type(offset) is not int or offset<0:
             raise ValueError('invalid query')
         query=query.strip()
+        default=self._default_target()
         with self.db() as db:
             db.execute('BEGIN')
             routes=[dict(r) for r in db.execute('SELECT r.* FROM intake_routes r JOIN projects p ON p.id=r.project WHERE (?=0 OR p.remote=1) ORDER BY r.project',(int(remote),))]
@@ -210,16 +293,18 @@ class RoutedIntake(Intake):
         for config_root in sorted({r['config_root'] for r in routes}):
             applicable=[r for r in routes if r['config_root']==config_root]
             target=self._target(applicable[0]['project'],remote)
-            page=target.list(query)
+            page=target.list(query,include_archived=include_archived,include_merged=include_merged)
             if any(r['generation']!=page['generation'] for r in applicable):
                 raise ValueError('route generation mismatch')
             versions.append((config_root,page['generation'],page['snapshot']))
             allowed={r['project'] for r in applicable}
             while True:
-                result.extend(p for p in page['projects'] if p['id'] in allowed)
+                result.extend(p for p in page['projects'] if p['id'] in allowed or
+                              (default is not None and default.root==Path(config_root).resolve()))
                 if page['next_offset'] is None:break
-                page=target.list(query,offset=page['next_offset'],snapshot=page['snapshot'])
+                page=target.list(query,offset=page['next_offset'],snapshot=page['snapshot'],include_archived=include_archived,include_merged=include_merged)
         result.sort(key=lambda p:p['id'])
+        if len({p['id'] for p in result})!=len(result):raise ValueError('duplicate project identity across canonical routes; review configuration')
         stamp=digest(dict(projects=result,versions=versions,remote=remote,query=query))
         if (offset and snapshot is None) or (snapshot is not None and snapshot!=stamp):
             raise ValueError('snapshot changed or missing; restart project listing')
@@ -227,19 +312,20 @@ class RoutedIntake(Intake):
                     search=dict(status='not_searched' if not query else 'matches' if result else 'no_match',
                                 scope='project_titles',total_matches=len(result)))
 
-    def export(self, project, *, operation='resume', mode='delegate'):
+    def export(self, project, *, operation='resume', mode='delegate', **kwargs):
         target=self._target(project)
-        return target.export(project,operation=operation,mode=mode) if target else super().export(project,operation=operation,mode=mode)
+        return target.export(project,operation=operation,mode=mode,**kwargs) if target else super().export(project,operation=operation,mode=mode,**kwargs)
 
-    def prepare(self, project):
+    def prepare(self, project, **kwargs):
         target=self._target(project)
-        return target.prepare(project) if target else super().prepare(project)
+        return target.prepare(project,**kwargs) if target else super().prepare(project,**kwargs)
 
     def folder(self, project):
-        # During local create the ID has not been inserted yet; do not require it.
         with self.db() as db:
             routed=db.execute('SELECT 1 FROM intake_routes WHERE project=?',(project,)).fetchone()
-        if routed:raise ValueError('migrated project originals are not configured locally')
+            local=db.execute('SELECT 1 FROM projects WHERE id=?',(project,)).fetchone()
+        if routed or (local is None and self._default_target() is not None):
+            raise ValueError('shared project originals are not configured locally')
         return super().folder(project)
 
 
@@ -247,6 +333,30 @@ def open_intake(root):
     """No automatic enrollment or credentials. Unconfigured roots stay local."""
     root=Path(root)
     return GitIntake(root) if (root/'canonical-git.json').exists() else RoutedIntake(root)
+
+
+def register_default_route(store, config_root):
+    """Trusted local opt-in; does not enable cloud creation or change cloud ACLs."""
+    config_root=Path(config_root).resolve()
+    config=json.loads((config_root/'canonical-git.json').read_text('utf-8'))
+    with store.db() as db:
+        if not db.execute('SELECT 1 FROM intake_routes WHERE config_root=? AND generation=?',
+                          (str(config_root),config['generation'])).fetchone():
+            raise ValueError('default route must already be registered and verified')
+    status=GitIntake(config_root).capabilities()
+    if not status['features']['projects']['creation_enabled']:
+        raise ValueError('canonical creation is not enabled; no routing change applied')
+    with store.db() as db:
+        db.execute('BEGIN IMMEDIATE')
+        old=db.execute('SELECT config_root,generation FROM intake_default_route WHERE singleton=1').fetchone()
+        if old and (old['config_root']!=str(config_root) or old['generation']!=config['generation']):
+            raise ValueError('default canonical already configured; no automatic replacement')
+        if not db.execute('SELECT 1 FROM intake_routes WHERE config_root=? AND generation=?',
+                          (str(config_root),config['generation'])).fetchone():
+            raise ValueError('registered route changed before activation')
+        if not old:db.execute('INSERT INTO intake_default_route VALUES (1,?,?)',(config['generation'],str(config_root)))
+    return dict(status='default-shared-route-enabled',generation=config['generation'],
+                legacy_shared_creation='fenced',local_private_creation='unchanged')
 
 
 def register_route(store,project,source_generation,config_root,verified_snapshot):

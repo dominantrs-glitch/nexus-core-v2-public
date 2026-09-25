@@ -1,0 +1,2 @@
+# Optional encrypted portable backup adapter.
+cryptography==50.0.1

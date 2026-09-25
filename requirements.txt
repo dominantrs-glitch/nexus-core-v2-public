@@ -1,2 +1,3 @@
-mcp==2.2.0
-websockets==17.1
+# Complete reference implementation. See requirements-core.txt for local-only use.
+-r requirements-pc-connector.txt
+-r requirements-recovery.txt

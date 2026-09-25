@@ -1,0 +1,2 @@
+# The local intake/context/storage core uses Python 3.12+ standard library only.
+# Native confirmation currently has a Windows reference adapter.

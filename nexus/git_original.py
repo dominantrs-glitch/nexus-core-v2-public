@@ -10,6 +10,8 @@ import sys
 
 ID = re.compile(r'^[a-z0-9][a-z0-9_-]{0,79}$')
 SECRET = re.compile(r'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})')
+MAX_BINARY_BYTES = 64 * 1024 * 1024
+CHUNK_BYTES = 192 * 1024
 
 
 def prepare(spec, destination, *, binary=False):
@@ -35,7 +37,7 @@ def prepare(spec, destination, *, binary=False):
         for key, limit in [('title', 300), ('source', 2000)]:
             if not isinstance(doc[key], str) or not doc[key].strip() or len(doc[key].encode('utf-8')) > limit:
                 raise ValueError('invalid document metadata')
-        formats = ('image/png', 'image/jpeg', 'application/pdf') if binary else ('text/plain', 'text/markdown')
+        formats = ('image/png', 'image/jpeg', 'image/webp', 'application/pdf') if binary else ('text/plain', 'text/markdown')
         if (doc['media_type'] not in formats
                 or not isinstance(doc['projects'], list) or not 1 <= len(doc['projects']) <= 100
                 or any(not isinstance(p, str) or not ID.fullmatch(p) for p in doc['projects'])
@@ -45,14 +47,17 @@ def prepare(spec, destination, *, binary=False):
         path = Path(doc['file'])
         if path.is_symlink() or not path.is_file():
             raise ValueError('original must be a regular local file')
-        limit = 262144 if binary else 24576
+        if re.fullmatch(r'chunk-[a-f0-9]{64}', doc['id']):
+            raise ValueError('reserved chunk identity')
+        limit = MAX_BINARY_BYTES if binary else 24576
         with path.open('rb') as source:
             raw = source.read(limit + 1)
         if not raw or len(raw) > limit:
             raise ValueError('original exceeds source limit')
         if binary:
             signatures = {'image/png': b'\x89PNG\r\n\x1a\n', 'image/jpeg': b'\xff\xd8\xff', 'application/pdf': b'%PDF-'}
-            if not raw.startswith(signatures[doc['media_type']]):
+            matches = raw.startswith(b'RIFF') and raw[8:12] == b'WEBP' if doc['media_type'] == 'image/webp' else raw.startswith(signatures[doc['media_type']])
+            if not matches:
                 raise ValueError('binary media signature mismatch')
             content = base64.b64encode(raw).decode('ascii')
         else:
@@ -67,6 +72,17 @@ def prepare(spec, destination, *, binary=False):
             captured_at=captured, content=content, authority='source-document-not-native-confirmation')
         if binary:
             files[relative]['bytes'] = len(raw)
+            if len(raw) > 262144:
+                chunks = []
+                for offset in range(0, len(raw), CHUNK_BYTES):
+                    chunk = raw[offset:offset + CHUNK_BYTES]
+                    chunk_hash = hashlib.sha256(chunk).hexdigest()
+                    files[f"projects/{spec['project']}/binary/chunk-{chunk_hash}/1.json"] = dict(
+                        schema=1, encoding='base64', sha256=chunk_hash, bytes=len(chunk),
+                        content=base64.b64encode(chunk).decode('ascii'))
+                    chunks.append(dict(sha256=chunk_hash, bytes=len(chunk)))
+                files[relative].update(schema=2, encoding='chunked-base64', chunks=chunks)
+                del files[relative]['content']
         current.append(dict(id=doc['id'], revision=doc['revision'], sha256=sha256, remote=True,
                             projects=doc['projects'], operations=doc['operations']))
         report.append(dict(id=doc['id'], revision=doc['revision'], title=doc['title'], bytes=len(raw), sha256=sha256,
@@ -88,6 +104,19 @@ def prepare(spec, destination, *, binary=False):
             restored = base64.b64decode(saved, validate=True) if binary else saved.encode('utf-8')
             if hashlib.sha256(restored).hexdigest() != value['sha256']:
                 raise ValueError('staged original integrity failure')
+    # Reopen and reassemble staged chunks, independent of source files.
+    for item in report:
+        record = json.loads((destination / item['file']).read_text(encoding='utf-8'))
+        if record.get('schema') == 2:
+            restored = bytearray()
+            for chunk in record['chunks']:
+                data = json.loads((destination / f"projects/{spec['project']}/binary/chunk-{chunk['sha256']}/1.json").read_text(encoding='utf-8'))
+                raw = base64.b64decode(data['content'], validate=True)
+                if len(raw) != chunk['bytes'] or hashlib.sha256(raw).hexdigest() != chunk['sha256']:
+                    raise ValueError('staged chunk integrity failure')
+                restored.extend(raw)
+            if len(restored) != record['bytes'] or hashlib.sha256(restored).hexdigest() != record['sha256']:
+                raise ValueError('staged original integrity failure')
     (destination / 'review.local.json').write_text(json.dumps(review, ensure_ascii=False, indent=2), encoding='utf-8')
     return review
 
@@ -96,7 +125,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('spec', type=Path)
     parser.add_argument('destination', type=Path)
-    parser.add_argument('--binary', action='store_true', help='Prepare explicitly selected PNG/JPEG/PDF, at most 256 KiB each')
+    parser.add_argument('--binary', action='store_true', help='Prepare explicitly selected PNG/JPEG/WebP/PDF, at most 64 MiB each')
     args = parser.parse_args()
     print(json.dumps(prepare(json.loads(args.spec.read_text(encoding='utf-8')), args.destination, binary=args.binary), ensure_ascii=False))
 

@@ -18,6 +18,14 @@ def install(db):
     db.execute('''CREATE TABLE IF NOT EXISTS intake_routes (
         project TEXT PRIMARY KEY REFERENCES intake_fences(project),
         generation TEXT NOT NULL, config_root TEXT NOT NULL)''')
+    db.execute('''CREATE TABLE IF NOT EXISTS intake_default_route (
+        singleton INTEGER PRIMARY KEY CHECK(singleton=1), generation TEXT NOT NULL,
+        config_root TEXT NOT NULL)''')
+    # Fence even pre-upgrade processes after an explicit common-store cutover.
+    # A cloud create never inserts a second local canonical project row.
+    db.execute('''CREATE TRIGGER IF NOT EXISTS canonical_shared_create_guard
+        BEFORE INSERT ON projects WHEN NEW.remote=1 AND EXISTS (SELECT 1 FROM intake_default_route)
+        BEGIN SELECT RAISE(ABORT, 'shared creation requires current canonical route'); END''')
     # DB enforcement is intentional: an old service need not have loaded new Python.
     for table, project_expr in (('projects', '{row}.id'), ('notes', '{row}.project'),
             ('requests', "json_extract({row}.result, '$.project')")):

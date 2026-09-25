@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from nexus.git_original import prepare
+from nexus.git_original import prepare, MAX_BINARY_BYTES
 
 
 class GitOriginalTests(unittest.TestCase):
@@ -65,8 +65,32 @@ class GitOriginalTests(unittest.TestCase):
 
     def test_binary_limits_and_declared_media_are_checked_before_staging(self):
         self.spec['documents'][0]['media_type'] = 'application/pdf'
-        for raw in (b'not a PDF', b'%PDF-' + b'x' * 262144):
+        for raw in (b'not a PDF', b'%PDF-' + b'x' * MAX_BINARY_BYTES):
             self.file.write_bytes(raw)
             with self.assertRaises(ValueError):
                 prepare(self.spec, self.destination, binary=True)
             self.assertFalse(self.destination.exists())
+
+    def test_large_binary_is_chunked_and_all_staged_bytes_reassemble_exactly(self):
+        raw = b'%PDF-' + bytes(range(256)) * 4200
+        self.file.write_bytes(raw)
+        self.spec['documents'][0]['media_type'] = 'application/pdf'
+        report = prepare(self.spec, self.destination, binary=True)
+        record = json.loads((self.destination / report['documents'][0]['file']).read_bytes())
+        self.assertEqual(record['schema'], 2)
+        self.assertNotIn('content', record)
+        restored = b''
+        for ref in record['chunks']:
+            path = self.destination / f"projects/target/binary/chunk-{ref['sha256']}/1.json"
+            self.assertLess(path.stat().st_size, 300000)
+            restored += base64.b64decode(json.loads(path.read_bytes())['content'], validate=True)
+        self.assertEqual(restored, raw)
+        self.assertEqual(record['sha256'], hashlib.sha256(raw).hexdigest())
+
+    def test_webp_requires_riff_and_webp_headers(self):
+        self.spec['documents'][0]['media_type'] = 'image/webp'
+        self.file.write_bytes(b'RIFF0000FAKEbytes')
+        with self.assertRaises(ValueError):prepare(self.spec,self.destination,binary=True)
+        self.file.write_bytes(b'RIFF0000WEBPbytes')
+        result=prepare(self.spec,self.destination,binary=True)
+        self.assertEqual(result['documents'][0]['bytes'],17)

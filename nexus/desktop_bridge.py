@@ -17,6 +17,9 @@ def dispatch(request, workspace=None):
     if action == 'start': return workspace_service.start()
     if action == 'stop': return workspace_service.stop()
     workspace = workspace or open_intake(default_root())
+    if action == 'daily':
+        from nexus.daily import collect
+        return collect('desktop', workspace=workspace)
     if action == 'list':
         return workspace.list(request.get('query', ''), offset=request.get('offset', 0),snapshot=request.get('snapshot'))
     project = request.get('project')
@@ -37,8 +40,13 @@ def dispatch(request, workspace=None):
             page = workspace.read(project, offset=page['next_offset'], snapshot=snapshot)
             if page['revision'] != revision: raise ValueError('project changed during read; reread')
             notes.extend(page['notes'])
+        try:
+            local_folders_available = workspace.folder(project).is_dir()
+        except (ValueError, OSError):
+            local_folders_available = False
         return dict(title=page['title'], revision=page['revision'],
-                    notes=notes, overview=page['overview'], state='consultation-not-completion')
+                    notes=notes, overview=page['overview'], state='consultation-not-completion',
+                    local_folders_available=local_folders_available)
     raise ValueError('unsupported action')
 
 

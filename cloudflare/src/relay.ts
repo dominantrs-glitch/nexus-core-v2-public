@@ -5,6 +5,7 @@ import { oauthPages, OAuthFlowError } from "./relay-oauth";
 import { GitHubBackend, type GitConfig } from "./github-store";
 import { GitIntake, dataMode } from "./git-store";
 import { gitMcp } from "./git-mcp";
+import {dailyService} from './daily-service';
 export { LocalTunnel } from "./tunnel";
 
 export class RelayApi extends WorkerEntrypoint<RelayEnv> {
@@ -33,7 +34,10 @@ export class RelayApi extends WorkerEntrypoint<RelayEnv> {
           (generation !== undefined && !/^[a-z0-9][a-z0-9_-]{0,79}$/.test(generation)))
         return failure(503,"git_configuration_required");
       const response = await gitMcp(parsed, new GitIntake(new GitHubBackend(this.env as GitConfig), props.userId,generation,mode.data,this.env.GIT_NATIVE_OWNER));
-      await reserve(this.env, 0, new TextEncoder().encode(await response.clone().text()).length);
+      // gitMcp's verified attachment encoder supplies an exact byte count.
+      // Do not clone/buffer its large response merely to charge the budget.
+      const sized=response.headers.get('Content-Length');
+      await reserve(this.env, 0, sized===null?new TextEncoder().encode(await response.clone().text()).length:Number(sized));
       return response;
     }
     return this.env.TUNNEL.get(this.env.TUNNEL.idFromName("single-owner-pc")).fetch("https://tunnel/request", {
@@ -63,6 +67,7 @@ export default {
       if (origin.protocol !== "https:" || origin.origin !== env.PUBLIC_ORIGIN || url.origin !== origin.origin)
         return failure(404, "not_found");
       if (request.headers.has("Origin") && request.headers.get("Origin") !== origin.origin) return failure(403, "invalid_origin");
+      if(url.pathname.startsWith('/daily/'))return await dailyService(request,env);
       if (url.pathname === "/connect" || url.pathname.startsWith("/reply/")) {
         const token = request.headers.get("Authorization")?.match(/^Bearer ([A-Za-z0-9_-]{43,128})$/)?.[1];
         if (!token || await hash(token) !== env.CONNECTOR_TOKEN_SHA256) return failure(401, "connector_unauthorized");

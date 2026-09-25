@@ -29,14 +29,26 @@ def build_intake_server(workspace):
         return result(lambda:workspace.list(query,remote=True,offset=offset,snapshot=snapshot),'search_unavailable')
 
     @server.tool(annotations=read)
-    def read_project(project: str,offset: int=0,snapshot: str | None=None,operation: str='resume',mode: str='delegate') -> types.CallToolResult:
+    def read_project(project: str,offset: int=0,snapshot: str | None=None,operation: str='resume',mode: str='delegate',
+                     task_types: list[str] | None=None,decision_factors: list[str] | None=None) -> types.CallToolResult:
         """Read current goals, choices and notes. Continue all pages with returned snapshot and same operation/mode. Git reads include scoped context; required context.complete=false blocks dependent work. Independent/red-team excludes routed personal/learning influence, not explicit project requirements. Drafts are not owner approval. Report unavailable sources without stale fallback."""
-        return result(lambda:workspace.read(project,remote=True,offset=offset,snapshot=snapshot,operation=operation,mode=mode),'read_unavailable')
+        return result(lambda:workspace.read(project,remote=True,offset=offset,snapshot=snapshot,operation=operation,mode=mode,
+                     task_types=task_types,decision_factors=decision_factors),'read_unavailable')
+
+    @server.tool(annotations=read)
+    def review_project_start(review: dict) -> types.CallToolResult:
+        """Search titles/notes first. Review purpose, responsibility, canonical store, assets and dependencies using current source references. Returns a nonbinding comparison for create_project.review; never changes a relationship or authorizes creation."""
+        def review_start():
+            from nexus.git_intake import GitIntake
+            target=workspace if isinstance(workspace,GitIntake) else getattr(workspace,'_default_target',lambda:None)()
+            if target is None:raise ValueError('shared project review is not configured')
+            return target.review_start(**review)
+        return result(review_start,'read_unavailable')
 
     @server.tool(annotations=write)
-    def create_project(title: str,source: str,request_id: str) -> types.CallToolResult:
-        """Use when the user says to start/save a project. Creates local project folders and a durable draft visible through this connection. Search existing projects first. source identifies this conversation; request_id is a unique retry key reused for an uncertain attempt. Does not approve a Contract or start implementation."""
-        return result(lambda:workspace.create(title,source,request_id,remote=True))
+    def create_project(title: str,source: str,request_id: str,review: dict | None=None) -> types.CallToolResult:
+        """Use when the user authorizes a new project. Search existing projects first. Configured shared creation requires review_project_start and review={input,digest}; it writes the same canonical store as the phone and creates no local original folders. Legacy local-only configurations retain their local path. source identifies this conversation; keep the same request_id/content on retry. Does not approve a Contract or start implementation."""
+        return result(lambda:workspace.create(title,source,request_id,remote=True,**({'review':review} if review is not None else {})))
 
     @server.tool(annotations=write)
     def save_project_note(project: str,kind: str,body: str,source: str,evidence: str,quote: str,expected_revision: int,request_id: str,supersedes: str | None=None) -> types.CallToolResult:

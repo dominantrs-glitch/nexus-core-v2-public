@@ -43,6 +43,8 @@ class TaskTests(unittest.TestCase):
         with self.assertRaises(InsufficientContext): self.task.finish()
         self.verify()
         self.assertEqual(self.task.finish()['project']['state'], 'done')
+        evaluations=[e for e in self.task.snapshot()['events'] if e['kind']=='learning_evaluation']
+        self.assertEqual(evaluations[-1]['payload']['status'],'no_correction_evidence')
         self.task.correct('guide', 'Use shorter sentences.', 'test correction')
         with self.assertRaises(InsufficientContext): self.task.finish()
         self.file.write_text('short v2', encoding='utf-8')
@@ -50,6 +52,9 @@ class TaskTests(unittest.TestCase):
         with self.assertRaises(InsufficientContext): self.task.finish()
         self.verify()
         self.assertEqual(self.task.finish()['project']['state'], 'done')
+        evaluations=[e for e in self.task.snapshot()['events'] if e['kind']=='learning_evaluation']
+        self.assertEqual(evaluations[-1]['payload']['status'],'candidate_review_available')
+        self.assertFalse(evaluations[-1]['payload']['binding'])
 
     def test_personal_context_used_without_manual_attachment(self):
         personal = PersonalContext(self.personal, self.task.adapter.capability, 'owner')

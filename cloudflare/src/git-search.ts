@@ -1,6 +1,7 @@
 /** Bounded discovery over current, permitted notes. Search never resolves context. */
 import {z} from 'zod';
 import {hash} from './relay-common';
+import {removalMarker} from './git-note-removal';
 
 const id=z.string().regex(/^[a-z0-9][a-z0-9_-]{0,79}$/);
 const kinds=z.enum(['goal','acceptance','constraint','explicit_choice','preference','research','proposal','question','correction','source']);
@@ -39,6 +40,7 @@ export async function searchNotes(input:z.infer<typeof searchInput>,snapshot:str
     if(noteOffset>project.current.length)throw new Error('invalid_search_cursor');
     while(noteOffset<project.current.length && scanned<20) {
       const offset=noteOffset++,note=await readNote(project,project.current[offset]);scanned++;
+      if(removalMarker(note.body))continue;
       if(input.kinds && !input.kinds.includes(note.kind as z.infer<typeof kinds>))continue;
       const fields=[['body',note.body],['quote',note.quote],['source',note.source],['note_id',note.id]];
       const haystack=normalize(fields.map(([,v])=>v).join('\n'));

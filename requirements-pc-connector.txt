@@ -1,0 +1,3 @@
+# Optional PC relay and connection-status surface.
+-r requirements-mcp.txt
+websockets==17.1

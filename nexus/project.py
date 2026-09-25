@@ -226,6 +226,19 @@ class ProjectStore:
                     # scoped lookup never becomes an existence/content oracle.
                     trace = {'category': 'insufficient_context', 'detail': str(error)}
             state = 'blocked' if missing else 'done'
+            # Closing always evaluates the learning evidence. Absence of a
+            # correction is a valid result, never a reason to invent a lesson.
+            corrections = [e['seq'] for e in events if e['kind'] == 'correction']
+            assessment = dict(status='needs_verification' if missing else
+                              'candidate_review_available' if corrections else 'no_correction_evidence',
+                              correction_events=corrections,
+                              candidate_events=[e['seq'] for e in events if e['kind'] == 'candidate'],
+                              output_event=output['seq'] if output else None,
+                              scope={'project': project, 'contract_revision': p['revision']},
+                              authority='candidate', binding=False,
+                              instruction='Review only evidence-backed lessons in this scope; no automatic owner-value or permission change.')
+            if not any(e['kind'] == 'learning_evaluation' and e['payload'] == assessment for e in events):
+                self._event(db, project, p['revision'], 'learning_evaluation', assessment)
             db.execute('UPDATE projects SET state=? WHERE id=?', (state, project))
             result = {'result': state}
             if trace is not None:

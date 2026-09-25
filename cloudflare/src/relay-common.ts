@@ -6,6 +6,11 @@ export interface RelayEnv extends Partial<GitConfig> {
   GIT_NATIVE_OWNER?: string;
   GIT_DATA_MODE?: string;
   GIT_GENERATION?: string;
+  DAILY_ENABLED?:string;
+  DAILY_TOKEN_SHA256?:string;
+  DAILY_PROJECT?:string;
+  DAILY_CALENDAR_IDS?:string;
+  DAILY_WORKPLACE_CALENDAR?:string;
   DB: D1Database;
   OAUTH_KV: KVNamespace;
   OAUTH_PROVIDER: OAuthHelpers;
@@ -45,7 +50,7 @@ export async function hash(value: string) {
   return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value))),
     b => b.toString(16).padStart(2, "0")).join("");
 }
-export async function smallBody(request: Request) {
+export async function smallBody(request: Request,limit=MAX_REQUEST) {
   if (!request.body) return "";
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -54,7 +59,7 @@ export async function smallBody(request: Request) {
     const part = await reader.read();
     if (part.done) break;
     size += part.value.length;
-    if (size > MAX_REQUEST) { await reader.cancel(); throw new Error("request too large"); }
+    if (size > limit) { await reader.cancel(); throw new Error("request too large"); }
     chunks.push(part.value);
   }
   const out = new Uint8Array(size);

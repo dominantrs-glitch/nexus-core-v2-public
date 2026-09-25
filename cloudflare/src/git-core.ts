@@ -139,9 +139,17 @@ export class GitCoreStore {
       document:await this.document(s.head,entry)};
   }
   async readShared(ref:Pick<NativeRef,'native_project'|'native_operation'>,request:NativeRequest,snapshot:string) {
-    const s=await this.current(snapshot),entry=s.catalog.projects.find(p=>p.project===ref.native_project);
+    const s=await this.current(),entry=s.catalog.projects.find(p=>p.project===ref.native_project);
     if(!entry?.enabled || entry.write_state!=="active" || !entry.shares.some(share=>share.project===request.project &&
       share.operation===request.operation && share.native_operation===ref.native_operation))throw new StoreError("native_project_unavailable");
+    if(s.head!==snapshot) {
+      const root=await this.git.read(snapshot,'nexus.json') as any;
+      const old=catalogSchema.safeParse(await this.git.read(snapshot,'native/catalog.json'));
+      if(root?.owner!==this.owner || root.generation!==this.generation || root.mode!==this.mode || !old.success ||
+        old.data.owner!==this.owner || old.data.native_owner!==this.nativeOwner || old.data.generation!==this.generation ||
+        old.data.mode!==this.mode || JSON.stringify(old.data.projects.find(p=>p.project===ref.native_project))!==JSON.stringify(entry))
+        throw new StoreError('native_context_changed_reread');
+    }
     return this.document(s.head,entry);
   }
   async write(args:unknown) {

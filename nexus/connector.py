@@ -11,13 +11,45 @@ from uuid import UUID
 
 import httpx2
 from websockets.asyncio.client import connect
-from websockets.exceptions import WebSocketException
+from websockets.exceptions import WebSocketException, ConnectionClosed, InvalidStatus
 
 from nexus.artifacts import Access, ArtifactStore, LocalBinaryProvider, MAX_ORIGINAL_BYTES
 from nexus.server import build_server
 from nexus.transfer_evidence import verify_outbound, record
 
 MAX_RESPONSE = 96 * 1024 * 1024
+
+
+class RelayReplyRejected(ValueError):
+    def __init__(self, status_code):
+        super().__init__('relay rejected response')
+        self.status_code = status_code
+
+
+def transport_reason(error):
+    """Only fixed categories, never server text, addresses or headers."""
+    status_code = None
+    if isinstance(error, RelayReplyRejected):
+        status_code = error.status_code
+    elif isinstance(error, (InvalidStatus, httpx2.HTTPStatusError)):
+        status_code = error.response.status_code
+    if status_code in (401, 403):
+        return 'relay_access_denied'
+    if status_code == 429:
+        return 'relay_rate_limited'
+    if status_code == 409 and isinstance(error, InvalidStatus):
+        return 'connector_already_online'
+    if isinstance(error, RelayReplyRejected):
+        return 'relay_reply_rejected'
+    if isinstance(error, (TimeoutError, httpx2.TimeoutException)):
+        return 'transport_timeout'
+    if isinstance(error, ConnectionClosed):
+        return 'connection_closed'
+    if isinstance(error, (OSError, httpx2.NetworkError)):
+        return 'network_unavailable'
+    if isinstance(error, ValueError):
+        return 'invalid_relay_data'
+    return 'transport_error'
 
 
 def validate_job(value, project):
@@ -61,7 +93,8 @@ async def run(origin, token, data, project, principal, evidence_path=None):
     await relay_app(origin, token, project, app, store=store, principal=principal, evidence_path=evidence_path)
 
 
-async def relay_app(origin, token, project, app, *, store=None, principal=None, evidence_path=None, on_state=None):
+async def relay_app(origin, token, project, app, *, store=None, principal=None, evidence_path=None,
+                    on_state=None, on_diagnostic=None):
     """Trusted transport helper. A caller must authorize its own data projection.
 
     The public synthetic launcher above retains its original project restriction.
@@ -120,17 +153,19 @@ async def relay_app(origin, token, project, app, *, store=None, principal=None, 
                                         headers={"Authorization": "Bearer " + token, "Content-Type": "application/json",
                                                  "X-Nexus-Status": str(status)})
                                     if result.status_code != 204:
-                                        raise ValueError("relay rejected response")
+                                        raise RelayReplyRejected(result.status_code)
                                     retry.healthy()
                                     if receipt:
                                         record(evidence_path, receipt, "relay_accepted")
                             finally:
                                 task.cancel()
                                 await asyncio.gather(task, return_exceptions=True)
-                    except (OSError, TimeoutError, ValueError, httpx2.HTTPError, WebSocketException):
+                    except (OSError, TimeoutError, ValueError, httpx2.HTTPError, WebSocketException) as error:
                         state, delay = retry.failed()
                         if on_state:
                             on_state(state)
+                        if on_diagnostic:
+                            on_diagnostic(transport_reason(error))
                         # Never log URLs, bearer tokens, data, or request bodies.
                         print(f"Relay unavailable; reconnect in {delay}s.", flush=True)
                         await asyncio.sleep(delay)

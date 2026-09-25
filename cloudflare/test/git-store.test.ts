@@ -185,9 +185,8 @@ it("repository-wide conflicts do not drop other project entries", async () => {
   const {store,git} = await fixture();
   const results = await Promise.allSettled([store.create({title:"A",source:"test",request_id:"a"}),
     new GitIntake(git,"owner").create({title:"B",source:"test",request_id:"b"})]);
-  expect(results.filter(r => r.status === "fulfilled")).toHaveLength(1);
-  const failed = results[0].status === "rejected" ? {title:"A",request_id:"a"} : {title:"B",request_id:"b"};
-  await store.create({...failed,source:"test"});
+  expect(results.filter(r => r.status === "fulfilled")).toHaveLength(2);
+  await store.create({title:'A',request_id:'a',source:'test'});
   expect((await store.list()).projects).toHaveLength(3);
 });
 it("correction preserves classification and immutable history; quotes cannot approve", async () => {
@@ -232,7 +231,7 @@ it("distinguishes title no-match, an empty later page, and unavailable search", 
   expect(result.isError).toBe(true);
   expect(JSON.parse(result.content[0].text).status).toBe("search_unavailable");
 });
-it("paging is tied to a branch snapshot and rejects mutations instead of skipping notes", async () => {
+it("paging completes a stable version during mutations without skipping notes", async () => {
   const {store,p,args} = await fixture();
   for(let i=0;i<11;i++) await store.save({...args,request_id:`s${i}`,expected_revision:i});
   const page = await store.read({project:p.project});
@@ -240,7 +239,9 @@ it("paging is tied to a branch snapshot and rejects mutations instead of skippin
   await expect(store.read({project:p.project,offset:10})).rejects.toThrow("snapshot_required");
   expect((await store.read({project:p.project,offset:10,snapshot:page.snapshot})).notes).toHaveLength(1);
   await store.save({...args,request_id:"after-page",expected_revision:11});
-  await expect(store.read({project:p.project,offset:10,snapshot:page.snapshot})).rejects.toThrow("snapshot_changed");
+  const continued=await store.read({project:p.project,offset:10,snapshot:page.snapshot});
+  expect(continued.notes).toHaveLength(1);
+  expect(continued).toMatchObject({revision:11,currentness:{changed:true,latest_revision:12}});
 });
 it("overview is stale after another note; fresh conversations always get current notes", async () => {
   const {store,p,args} = await fixture();
@@ -304,8 +305,10 @@ it("omits unchanged context bytes but returns changed or unavailable context",as
   expect(cached.context_digest).toBe(baseline.context_digest);
   expect((await store.read({project:p.project,detail:"changes",since_revision:baseline.revision,
     known_snapshot:baseline.snapshot})).context.items).toHaveLength(1);
-  await store.save({project:source.project,kind:"correction",body:"Synthetic revised rule",source:"synthetic",
-    evidence:"model_inference",quote:"",expected_revision:1,request_id:"context-revise",supersedes:rule.note});
+  // Simulate a trusted policy source becoming unavailable. Normal rule edits
+  // now update the source and delivery reference atomically through preview.
+  const broken=structuredClone(context);broken.entries[0].source.note='n-unavailable';
+  await git.commit(git.branch,{'context.json':broken});
   const changed=await store.read({project:p.project,detail:"changes",since_revision:baseline.revision,
     known_snapshot:baseline.snapshot,known_context_digest:baseline.context_digest});
   expect(changed.context.complete).toBe(false);
@@ -341,7 +344,7 @@ it("status-only reads fetch just the current summary and never imply complete co
   git.read=async(c,path)=>{paths.push(path);return original(c,path);};
   const view=await store.read({project:p.project,detail:"overview"});
   expect(view).toMatchObject({read_scope:"overview",notes:[],notes_omitted:true,next_offset:null,overview_status:"current",context:{complete:false,status:"not_evaluated_overview"}});
-  expect(paths).toEqual(["nexus.json",`projects/${p.project}/manifest.json`,`projects/${p.project}/records/${summary.note}.json`]);
+  expect(paths).toEqual(["nexus.json",`projects/${p.project}/manifest.json`,'lifecycle.json',`projects/${p.project}/records/${summary.note}.json`]);
   for(const operation of ["implement","review","plan"])await expect(store.read({project:p.project,detail:"overview",operation})).rejects.toThrow("status_only");
   await expect(store.read({project:p.project,detail:"overview",offset:10,snapshot:view.snapshot})).rejects.toThrow("status_only");
   await store.save({...args,request_id:"new-note",expected_revision:2});

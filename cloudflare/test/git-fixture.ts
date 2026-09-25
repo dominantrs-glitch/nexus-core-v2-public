@@ -35,7 +35,17 @@ export class FakeGitHub {
       return Response.json({token:"synthetic-only",expires_at:new Date(Date.now()+3600000).toISOString()});
     }
     if (req.headers.get("Authorization") !== "Bearer synthetic-only") return fail(401);
-    if (this.failReads && req.method === "GET") return fail(503);
+    if (this.failReads && (req.method === "GET"||path==='/graphql')) return fail(503);
+    if(path==='/graphql'){
+      const repository:any={databaseId:42,isPrivate:this.privateRepo};
+      for(const [key,value] of Object.entries(body.variables))if(/^p\d+$/.test(key)){
+        const expression=String(value),commit=expression.slice(0,40),path=expression.slice(41);
+        const item=this.objects.get(commit)?.[path];
+        repository['b'+key.slice(1)]=item===undefined?null:{__typename:'Blob',text:JSON.stringify(item),isTruncated:false,
+          byteSize:new TextEncoder().encode(JSON.stringify(item)).length};
+      }
+      return Response.json({data:{repository}});
+    }
     if (path === "/repos/synthetic/data") return Response.json({private:this.privateRepo,id:42});
     if (path.endsWith("/git/ref/heads/main")) return Response.json({object:{sha:this.branch}});
     if (path.includes("/contents/")) {
@@ -48,7 +58,10 @@ export class FakeGitHub {
     if (path.endsWith("/git/trees")) {
       const sha = this.next(), base = this.trees.get(body.base_tree);
       if (!base) return fail(422);
-      this.trees.set(sha,{...base,...Object.fromEntries(body.tree.map((e:any)=>[e.path,JSON.parse(e.content)]))});
+      const next={...base};
+      for(const e of body.tree){if(e.sha===null){if(!(e.path in next))return fail(422);delete next[e.path];}
+        else next[e.path]=JSON.parse(e.content);}
+      this.trees.set(sha,next);
       return Response.json({sha},{status:201});
     }
     if (path.endsWith("/git/commits")) {

@@ -134,7 +134,9 @@ class Intake:
                 self.folder(prior['project'])
                 return prior
             project = 'p-' + uuid.uuid4().hex[:16]
-            self.folder(project)
+            # This is a new local identity, before registration. Routed creates
+            # already chose their destination and must not consult cloud here.
+            Intake.folder(self,project)
             db.execute('INSERT INTO projects VALUES (?,?,0,?,?)', (project,title,int(remote),source))
             return self._receipt(db,request_id,digest,dict(project=project,revision=0,status='saved-draft',binding=False))
 
@@ -188,7 +190,9 @@ class Intake:
             db.execute('UPDATE projects SET revision=? WHERE id=?', (revision,project))
             return self._receipt(db,request_id,digest,dict(project=project,note=note,revision=revision,status='saved-draft',binding=False))
 
-    def read(self, project, *, remote=False, offset=0, snapshot=None, operation='resume', mode='delegate', detail='full'):
+    def read(self, project, *, remote=False, offset=0, snapshot=None, operation='resume', mode='delegate', detail='full', task_types=None, decision_factors=None):
+        if task_types is not None or decision_factors is not None:
+            raise ValueError('scoped classification requires the configured shared canonical route')
         if detail not in {'full','overview'} or (detail=='overview' and (offset != 0 or operation != 'resume')):
             raise ValueError('overview is status only; use full read')
         if snapshot is not None: raise ValueError('snapshot is only supported by the Git route')
@@ -233,7 +237,9 @@ class Intake:
             writable(db, project)
             db.execute('UPDATE projects SET remote=? WHERE id=?',(int(enabled),project))
 
-    def export(self, project, *, operation='resume', mode='delegate'):
+    def export(self, project, *, operation='resume', mode='delegate', task_types=None, decision_factors=None):
+        if task_types is not None or decision_factors is not None:
+            raise ValueError('scoped classification requires the configured shared canonical route')
         view, offset = self.read(project,operation=operation,mode=mode), 0
         while view['next_offset'] is not None:
             offset = view['next_offset']
@@ -251,12 +257,15 @@ class Intake:
             with target.open('xb') as f: f.write(data)
         return dict(path=str(target),sha256=hashlib.sha256(data).hexdigest(),revision=view['revision'])
 
-    def prepare(self, project):
+    def prepare(self, project, *, mode='delegate', task_types=None, decision_factors=None):
         """Local draft for native Task.start. No confirmation or permission implied."""
-        exported = self.export(project,operation='plan')
+        exported = self.export(project,operation='plan',mode=mode,
+                               task_types=task_types,decision_factors=decision_factors)
         view = json.loads(Path(exported['path']).read_text(encoding='utf-8'))
         if 'context' in view and not view['context'].get('complete'):
             raise ValueError('required context unavailable before native Task handoff')
+        if view.get('currentness',{}).get('changed'):
+            raise ValueError('project changed during handoff; reread before preparing a contract draft')
         grouped = {kind:[n for n in view['notes'] if n['kind']==kind] for kind in KINDS}
         if not grouped['goal'] or not grouped['acceptance']:
             raise ValueError('explicit goal and acceptance notes required before implementation')
@@ -291,6 +300,8 @@ def main():
     listing.add_argument('--query',default='')
     listing.add_argument('--offset',type=int,default=0)
     listing.add_argument('--snapshot')
+    listing.add_argument('--include-archived',action='store_true')
+    listing.add_argument('--include-merged',action='store_true')
     searching=sub.add_parser('search',help='Search current notes in an explicitly configured shared Git store')
     searching.add_argument('--query',required=True)
     searching.add_argument('--project')
@@ -302,14 +313,23 @@ def main():
         command.add_argument('project')
         if name in ('read','export'):
             command.add_argument('--operation',default='resume',choices=['resume','plan','implement','review'])
-            command.add_argument('--mode',default='delegate',choices=['delegate','independent','red-team'])
+        command.add_argument('--mode',default='delegate',choices=['delegate','independent','red-team'])
+        command.add_argument('--task-types',nargs='*')
+        command.add_argument('--decision-factors',nargs='+',choices=['none','owner_values','priority','tradeoff','delegated_decision'])
         if name=='read':
             command.add_argument('--offset',type=int,default=0)
             command.add_argument('--snapshot')
-            command.add_argument('--detail',default='full',choices=['full','overview','changes','relations'])
+            command.add_argument('--detail',default='full',choices=['full','overview','context','changes','relations'])
             command.add_argument('--since-revision',type=int)
             command.add_argument('--known-snapshot')
             command.add_argument('--known-context-digest')
+    lifecycle=sub.add_parser('lifecycle')
+    lifecycle.add_argument('project')
+    lifecycle.add_argument('--detail',default='status',choices=['status','integrity','deletion_review'])
+    for name in ('preview-lifecycle','apply-lifecycle','preview-rule','apply-rule','preview-note-removal','apply-note-removal'):
+        sub.add_parser(name).add_argument('json_file',type=Path)
+    sub.add_parser('status',help='Read capabilities from an explicit canonical Git root')
+    sub.add_parser('review-start',help='Review existing projects before a shared create').add_argument('json_file',type=Path)
     for name in ('create','save'):
         command=sub.add_parser(name)
         command.add_argument('json_file',type=Path)
@@ -317,7 +337,20 @@ def main():
     a=p.parse_args()
     from nexus.git_intake import open_intake
     w=open_intake(a.root)
-    if a.command=='list': result=w.list(a.query,offset=a.offset,snapshot=a.snapshot)
+    if a.command=='list':
+        extra={k:True for k,v in dict(include_archived=a.include_archived,include_merged=a.include_merged).items() if v}
+        result=w.list(a.query,offset=a.offset,snapshot=a.snapshot,**extra)
+    elif a.command in ('lifecycle','preview-lifecycle','apply-lifecycle','preview-rule','apply-rule','preview-note-removal','apply-note-removal'):
+        from nexus.git_intake import GitIntake
+        payload=dict(project=a.project,detail=a.detail) if a.command=='lifecycle' else json.loads(a.json_file.read_text(encoding='utf-8'))
+        target=w if isinstance(w,GitIntake) else w._target(payload['project'])
+        if target is None:raise ValueError('lifecycle requires a configured shared canonical project')
+        result=getattr(target,a.command.replace('-','_'))(**payload)
+    elif a.command in ('status','review-start'):
+        from nexus.git_intake import GitIntake
+        if not isinstance(w,GitIntake):w=w._default_target()
+        if w is None:raise ValueError('use the trusted canonical Git root for project-start review or service status')
+        result=w.capabilities() if a.command=='status' else w.review_start(**json.loads(a.json_file.read_text(encoding='utf-8')))
     elif a.command=='search':
         from nexus.git_intake import GitIntake
         if not isinstance(w,GitIntake):
@@ -328,9 +361,15 @@ def main():
     elif a.command=='read':
         extra=dict(since_revision=a.since_revision,known_snapshot=a.known_snapshot,
                    known_context_digest=a.known_context_digest) if a.detail=='changes' else {}
+        if a.detail=='full' and a.known_context_digest is not None:extra['known_context_digest']=a.known_context_digest
+        if a.task_types is not None:extra['task_types']=a.task_types
+        if a.decision_factors is not None:extra['decision_factors']=a.decision_factors
         result=w.read(a.project,offset=a.offset,snapshot=a.snapshot,operation=a.operation,mode=a.mode,detail=a.detail,**extra)
-    elif a.command=='export': result=w.export(a.project,operation=a.operation,mode=a.mode)
-    elif a.command=='prepare': result=w.prepare(a.project)
+    elif a.command=='export':
+        extra={k:v for k,v in dict(task_types=a.task_types,decision_factors=a.decision_factors).items() if v is not None}
+        result=w.export(a.project,operation=a.operation,mode=a.mode,**extra)
+    elif a.command=='prepare':
+        result=w.prepare(a.project,mode=a.mode,task_types=a.task_types,decision_factors=a.decision_factors)
     else:
         payload=json.loads(a.json_file.read_text(encoding='utf-8'))
         if a.command=='create':

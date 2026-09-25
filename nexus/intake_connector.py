@@ -25,14 +25,15 @@ def main():
     run_host(args.root)
 
 
-async def activate(workspace_root, on_state=None):
+async def activate(workspace_root, on_state=None, *, on_diagnostic=None):
     workspace=open_intake(workspace_root)
     root=Path(__file__).resolve().parents[1]
     cfg=json.loads((root/'cloudflare/wrangler.relay.remote.jsonc').read_text(encoding='utf-8-sig'))['vars']
     if cfg['RELAY_ENABLED']!='true': raise ValueError('relay disabled')
     token=read_windows_token(root/'runtime/connector-token.dpapi')
     app=build_intake_server(workspace).streamable_http_app(json_response=True,stateless_http=True,max_request_body_size=16384)
-    await relay_app(cfg['PUBLIC_ORIGIN'],token,cfg['PROJECT_ID'],app,on_state=on_state)
+    await relay_app(cfg['PUBLIC_ORIGIN'],token,cfg['PROJECT_ID'],app,on_state=on_state,
+                    on_diagnostic=on_diagnostic)
 
 
 if __name__=='__main__': main()
