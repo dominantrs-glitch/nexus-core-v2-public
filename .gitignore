@@ -11,3 +11,4 @@ coverage/
 cloudflare/wrangler.remote.jsonc
 cloudflare/wrangler.relay.remote.jsonc
 cloudflare/wrangler.git-pilot.remote.jsonc
+/my-core-example/

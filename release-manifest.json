@@ -6,9 +6,14 @@
   "history_included": false,
   "files": [
     {
+      "path": ".gitattributes",
+      "sha256": "6f4c8a3be961d2d80b1b42ea7cfc9e49ddc9f1b0a42a476e4b5c169b4bef1abd",
+      "bytes": 161
+    },
+    {
       "path": ".gitignore",
-      "sha256": "94e381b50caddfbd53ba34303b2c6a283d609535950765e38a4122b484d006df",
-      "bytes": 207
+      "sha256": "f524f5b0acd30765f7ef7ac3921b418308e3413889d04107ae0107b86c0c0800",
+      "bytes": 225
     },
     {
       "path": "AGENTS.md",
@@ -397,8 +402,8 @@
     },
     {
       "path": "docs/release-validation.md",
-      "sha256": "d7948c1f5fa56b31f14b70b3dddf5738280ddda9798f472913ce11eada60e70b",
-      "bytes": 1333
+      "sha256": "6fa23f1fe3a95b963160faf4d3a220b751d68de3479b60b74d87e019e7ce0881",
+      "bytes": 1569
     },
     {
       "path": "examples/core_only.py",

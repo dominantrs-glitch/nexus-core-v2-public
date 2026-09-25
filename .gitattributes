@@ -1,0 +1,7 @@
+# Keep release-manifest byte hashes reproducible on Windows checkouts too.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.pdf binary

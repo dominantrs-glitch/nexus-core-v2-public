@@ -16,6 +16,9 @@ Source selection uses an explicit hashed allowlist and exact replacement counts.
 Private account identifiers, actual project IDs, credentials, runtime data,
 production configuration and prior private Git history are excluded. The release
 manifest records the final exported bytes, including this documentation update.
+The public `.gitattributes` keeps text in LF form so Windows' automatic checkout
+conversion does not invalidate the manifest hashes. The sample data directory is
+ignored. Final publication is independently downloaded and byte-compared.
 
 Windows remains the complete reference-test platform. A successful synthetic
 check does not prove another operator's credentials, cloud setup, native
